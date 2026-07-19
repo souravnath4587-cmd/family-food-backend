@@ -167,15 +167,148 @@ async function run() {
       }
     });
 
-    app.get("/api/products", async (req: Request, res: Response) => {
-      const result = await productsCollection.find().toArray();
-      res.status(200).send(result);
+    // app.get("/api/products", async (req: Request, res: Response) => {
+    //   const result = await productsCollection.find().toArray();
+    //   res.status(200).send(result);
+    // });
+
+    app.get("/api/products/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+
+        // Validate ObjectId
+        if (!ObjectId.isValid(id as string)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid product id.",
+          });
+        }
+
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id as string),
+        });
+
+        if (!product) {
+          return res.status(404).json({
+            success: false,
+            message: "Product not found.",
+          });
+        }
+
+        res.status(200).json({
+          success: true,
+          data: product,
+        });
+      } catch (error) {
+        console.error("Get Product Error:", error);
+
+        res.status(500).json({
+          success: false,
+          message: "Internal Server Error",
+        });
+      }
+    });
+
+    app.patch("/api/products/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+        const updatedData = req.body;
+
+        if (!ObjectId.isValid(id as string)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid product id",
+          });
+        }
+
+        const filter = {
+          _id: new ObjectId(id as string),
+        };
+
+        const updateDoc = {
+          $set: {
+            ...updatedData,
+            updatedAt: new Date(),
+          },
+        };
+
+        const result = await productsCollection.updateOne(filter, updateDoc);
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({
+            success: false,
+            message: "Product not found",
+          });
+        }
+
+        const updatedProduct = await productsCollection.findOne(filter);
+
+        res.status(200).json({
+          success: true,
+          message: "Product updated successfully",
+          data: updatedProduct,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Failed to update product",
+        });
+      }
     });
 
     app.post("/api/products", async (req: Request, res: Response) => {
       const query = req.body;
       const result = await productsCollection.insertOne(query);
       res.send(result);
+    });
+
+    app.delete("/api/products/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id as string)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid product id",
+          });
+        }
+
+        const filter = {
+          _id: new ObjectId(id as string),
+        };
+
+        const product = await productsCollection.findOne(filter);
+
+        if (!product) {
+          return res.status(404).json({
+            success: false,
+            message: "Product not found",
+          });
+        }
+
+        const result = await productsCollection.deleteOne(filter);
+
+        if (result.deletedCount === 0) {
+          return res.status(500).json({
+            success: false,
+            message: "Failed to delete product",
+          });
+        }
+
+        res.status(200).json({
+          success: true,
+          message: "Product deleted successfully",
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Internal server error",
+        });
+      }
     });
 
     app.get("/", (_req: Request, res: Response) => {
