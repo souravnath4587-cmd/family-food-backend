@@ -54,6 +54,138 @@ async function run() {
     const cartCollection = db.collection<Cart>("cart");
     const ordersCollection = db.collection("orders");
 
+    // admin manage orders :
+    app.get(
+      "/api/admin/orders/:orderId",
+      async (req: Request, res: Response) => {
+        try {
+          const { orderId } = req.params;
+
+          if (!ObjectId.isValid(orderId as string)) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid order ID",
+            });
+          }
+
+          const order = await ordersCollection.findOne({
+            _id: new ObjectId(orderId as string),
+          });
+
+          if (!order) {
+            return res.status(404).json({
+              success: false,
+              message: "Order not found",
+            });
+          }
+
+          return res.status(200).json({
+            success: true,
+            message: "Order fetched successfully",
+            data: order,
+          });
+        } catch (error) {
+          console.error("Get admin order details error:", error);
+
+          return res.status(500).json({
+            success: false,
+            message: "Failed to fetch order",
+          });
+        }
+      },
+    );
+
+    app.patch(
+      "/api/admin/orders/:orderId/status",
+      async (req: Request, res: Response) => {
+        try {
+          const { orderId } = req.params;
+          const { orderStatus } = req.body;
+
+          if (!ObjectId.isValid(orderId as string)) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid order ID",
+            });
+          }
+
+          const allowedStatuses = [
+            "pending",
+            "confirmed",
+            "processing",
+            "shipped",
+            "delivered",
+            "cancelled",
+          ];
+
+          if (!allowedStatuses.includes(orderStatus)) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid order status",
+            });
+          }
+
+          const result = await ordersCollection.updateOne(
+            {
+              _id: new ObjectId(orderId as string),
+            },
+            {
+              $set: {
+                orderStatus,
+                updatedAt: new Date(),
+              },
+            },
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).json({
+              success: false,
+              message: "Order not found",
+            });
+          }
+
+          const updatedOrder = await ordersCollection.findOne({
+            _id: new ObjectId(orderId as string),
+          });
+
+          return res.status(200).json({
+            success: true,
+            message: "Order status updated successfully",
+            data: updatedOrder,
+          });
+        } catch (error) {
+          console.error("Update order status error:", error);
+
+          return res.status(500).json({
+            success: false,
+            message: "Failed to update order status",
+          });
+        }
+      },
+    );
+
+    app.get("/api/admin/orders", async (req: Request, res: Response) => {
+      try {
+        const orders = await ordersCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        return res.status(200).json({
+          success: true,
+          message: "All orders fetched successfully",
+          data: orders,
+        });
+      } catch (error) {
+        console.error("Get all orders error:", error);
+
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch orders",
+        });
+      }
+    });
+
     app.get("/api/orders/:orderId", async (req: Request, res: Response) => {
       try {
         const { orderId } = req.params;
@@ -130,42 +262,6 @@ async function run() {
         });
       }
     });
-
-    // app.get("/api/orders/:id", async (req: Request, res: Response) => {
-    //   try {
-    //     const { id } = req.params;
-
-    //     if (!ObjectId.isValid(id as string)) {
-    //       return res.status(400).json({
-    //         success: false,
-    //         message: "Invalid order id",
-    //       });
-    //     }
-
-    //     const order = await ordersCollection.findOne({
-    //       _id: new ObjectId(id as string),
-    //     });
-
-    //     if (!order) {
-    //       return res.status(404).json({
-    //         success: false,
-    //         message: "Order not found",
-    //       });
-    //     }
-
-    //     return res.status(200).json({
-    //       success: true,
-    //       data: order,
-    //     });
-    //   } catch (error) {
-    //     console.error(error);
-
-    //     return res.status(500).json({
-    //       success: false,
-    //       message: "Failed to fetch order",
-    //     });
-    //   }
-    // });
 
     app.post("/api/orders", async (req: Request, res: Response) => {
       try {
