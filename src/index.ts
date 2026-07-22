@@ -52,6 +52,395 @@ async function run() {
     const usersCollection = db.collection("user");
     const productsCollection = db.collection("products");
     const cartCollection = db.collection<Cart>("cart");
+    const ordersCollection = db.collection("orders");
+
+    app.get("/api/orders/:orderId", async (req: Request, res: Response) => {
+      try {
+        const { orderId } = req.params;
+        const userId = req.headers["user-id"] as string;
+
+        if (!userId) {
+          return res.status(401).json({
+            success: false,
+            message: "User is not authenticated",
+          });
+        }
+
+        if (!ObjectId.isValid(orderId as string)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid order ID",
+          });
+        }
+
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(orderId as string),
+          userId,
+        });
+
+        if (!order) {
+          return res.status(404).json({
+            success: false,
+            message: "Order not found",
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Order fetched successfully",
+          data: order,
+        });
+      } catch (error) {
+        console.error("Get single order error:", error);
+
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch order",
+        });
+      }
+    });
+
+    app.get("/api/orders", async (req: Request, res: Response) => {
+      try {
+        const userId = req.headers["user-id"] as string;
+
+        if (!userId) {
+          return res.status(401).json({
+            success: false,
+            message: "User is not authenticated",
+          });
+        }
+
+        const orders = await ordersCollection
+          .find({ userId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        return res.status(200).json({
+          success: true,
+          message: "Orders fetched successfully",
+          data: orders,
+        });
+      } catch (error) {
+        console.error("Get orders error:", error);
+
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch orders",
+        });
+      }
+    });
+
+    // app.get("/api/orders/:id", async (req: Request, res: Response) => {
+    //   try {
+    //     const { id } = req.params;
+
+    //     if (!ObjectId.isValid(id as string)) {
+    //       return res.status(400).json({
+    //         success: false,
+    //         message: "Invalid order id",
+    //       });
+    //     }
+
+    //     const order = await ordersCollection.findOne({
+    //       _id: new ObjectId(id as string),
+    //     });
+
+    //     if (!order) {
+    //       return res.status(404).json({
+    //         success: false,
+    //         message: "Order not found",
+    //       });
+    //     }
+
+    //     return res.status(200).json({
+    //       success: true,
+    //       data: order,
+    //     });
+    //   } catch (error) {
+    //     console.error(error);
+
+    //     return res.status(500).json({
+    //       success: false,
+    //       message: "Failed to fetch order",
+    //     });
+    //   }
+    // });
+
+    app.post("/api/orders", async (req: Request, res: Response) => {
+      try {
+        const { customer, shippingAddress, deliveryLocation } = req.body;
+
+        // ==========================================
+        // 1. Get user ID
+        // ==========================================
+
+        const userId = req.headers["user-id"] as string;
+
+        if (!userId) {
+          return res.status(401).json({
+            success: false,
+            message: "User is not authenticated",
+          });
+        }
+
+        // ==========================================
+        // 2. Validate customer information
+        // ==========================================
+
+        if (!customer?.fullName) {
+          return res.status(400).json({
+            success: false,
+            message: "Full name is required",
+          });
+        }
+
+        if (!customer?.phone) {
+          return res.status(400).json({
+            success: false,
+            message: "Phone number is required",
+          });
+        }
+
+        // ==========================================
+        // 3. Validate shipping address
+        // ==========================================
+
+        if (!shippingAddress?.address) {
+          return res.status(400).json({
+            success: false,
+            message: "Shipping address is required",
+          });
+        }
+
+        if (!shippingAddress?.city) {
+          return res.status(400).json({
+            success: false,
+            message: "City is required",
+          });
+        }
+
+        // ==========================================
+        // 4. Validate delivery location
+        // ==========================================
+
+        if (
+          deliveryLocation !== "inside_feni" &&
+          deliveryLocation !== "outside_feni"
+        ) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid delivery location",
+          });
+        }
+
+        // ==========================================
+        // 5. Find user's cart
+        // ==========================================
+
+        const cart = await cartCollection.findOne({
+          userId,
+        });
+
+        if (!cart || !cart.items || cart.items.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: "Your cart is empty",
+          });
+        }
+
+        // ==========================================
+        // 6. Prepare order items
+        // ==========================================
+
+        const orderItems = [];
+
+        let subtotal = 0;
+
+        for (const cartItem of cart.items) {
+          // ----------------------------------------
+          // Validate Product ID
+          // ----------------------------------------
+
+          if (!ObjectId.isValid(cartItem.productId.toString())) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid product ID for ${cartItem.name}`,
+            });
+          }
+
+          // ----------------------------------------
+          // Find current product
+          // ----------------------------------------
+
+          const product = await productsCollection.findOne({
+            _id: new ObjectId(cartItem.productId.toString()),
+          });
+
+          if (!product) {
+            return res.status(404).json({
+              success: false,
+              message: `Product "${cartItem.name}" is no longer available`,
+            });
+          }
+
+          // ========================================
+          // 7. Check stock
+          // ========================================
+
+          const availableStock = product.stockQuantity ?? 0;
+
+          if (availableStock < cartItem.quantity) {
+            return res.status(400).json({
+              success: false,
+              message: `Not enough stock for "${product.name}". Available stock: ${availableStock}`,
+            });
+          }
+
+          // ========================================
+          // 8. Calculate current product price
+          // ========================================
+
+          const discountPrice = product.discountPrice ?? 0;
+
+          const finalPrice =
+            discountPrice > 0 ? product.price - discountPrice : product.price;
+
+          // ========================================
+          // 9. Calculate item subtotal
+          // ========================================
+
+          const itemSubtotal = finalPrice * cartItem.quantity;
+
+          subtotal += itemSubtotal;
+
+          // ========================================
+          // 10. Add item to order
+          // ========================================
+
+          orderItems.push({
+            productId: product._id,
+            name: product.name,
+            image:
+              product.imageUrl || product.image || product.images?.[0] || "",
+
+            price: finalPrice,
+
+            quantity: cartItem.quantity,
+
+            subtotal: itemSubtotal,
+          });
+        }
+
+        // ==========================================
+        // 11. Calculate shipping
+        // ==========================================
+
+        const shippingCost = deliveryLocation === "inside_feni" ? 40 : 100;
+
+        // ==========================================
+        // 12. Calculate total
+        // ==========================================
+
+        const totalAmount = subtotal + shippingCost;
+
+        // ==========================================
+        // 13. Create order
+        // ==========================================
+
+        const newOrder = {
+          userId,
+
+          customer: {
+            fullName: customer.fullName,
+            phone: customer.phone,
+            email: customer.email || "",
+          },
+
+          shippingAddress: {
+            address: shippingAddress.address,
+            city: shippingAddress.city,
+            postalCode: shippingAddress.postalCode || "",
+          },
+
+          deliveryLocation,
+
+          items: orderItems,
+
+          subtotal,
+
+          shippingCost,
+
+          totalAmount,
+
+          paymentMethod: "cash_on_delivery",
+
+          paymentStatus: "pending",
+
+          orderStatus: "pending",
+
+          createdAt: new Date(),
+
+          updatedAt: new Date(),
+        };
+
+        // ==========================================
+        // 14. Insert order
+        // ==========================================
+
+        const orderResult = await ordersCollection.insertOne(newOrder);
+
+        // ==========================================
+        // 15. Reduce stock
+        // ==========================================
+
+        for (const item of orderItems) {
+          await productsCollection.updateOne(
+            {
+              _id: item.productId,
+            },
+            {
+              $inc: {
+                stockQuantity: -item.quantity,
+              },
+              $set: {
+                updatedAt: new Date(),
+              },
+            },
+          );
+        }
+
+        // ==========================================
+        // 16. Clear user's cart
+        // ==========================================
+
+        await cartCollection.deleteOne({
+          userId,
+        });
+
+        // ==========================================
+        // 17. Return success response
+        // ==========================================
+
+        return res.status(201).json({
+          success: true,
+          message: "Order placed successfully",
+
+          data: {
+            _id: orderResult.insertedId,
+
+            ...newOrder,
+          },
+        });
+      } catch (error) {
+        console.error("Create order error:", error);
+
+        return res.status(500).json({
+          success: false,
+          message: "Failed to place order",
+        });
+      }
+    });
 
     // cart :
     // ============================================
@@ -365,7 +754,10 @@ async function run() {
                 productId: product._id,
                 name: product.name,
                 image: product.imageUrl || product.image || "",
-                price: product.discountPrice || product.price,
+                price:
+                  product.discountPrice && product.discountPrice > 0
+                    ? product.price - product.discountPrice
+                    : product.price,
                 quantity,
               },
             ],
@@ -419,7 +811,10 @@ async function run() {
 
                   name: product.name,
                   image: product.imageUrl || product.image || "",
-                  price: product.discountPrice || product.price,
+                  price:
+                    product.discountPrice && product.discountPrice > 0
+                      ? product.price - product.discountPrice
+                      : product.price,
                   quantity,
                 },
               },
