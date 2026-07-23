@@ -53,8 +53,211 @@ async function run() {
     const productsCollection = db.collection("products");
     const cartCollection = db.collection<Cart>("cart");
     const ordersCollection = db.collection("orders");
+    const wishlistCollection = db.collection("wishlist");
+
+    // user WishList :
+    app.post("/api/wishlist", async (req, res) => {
+      try {
+        const { userId, productId } = req.body;
+
+        if (!userId || !productId) {
+          return res.status(400).json({
+            message: "userId and productId are required",
+          });
+        }
+
+        // Check if wishlist already exists
+        const wishlist = await wishlistCollection.findOne({
+          userId,
+        });
+
+        // If wishlist doesn't exist
+        if (!wishlist) {
+          const newWishlist = {
+            userId,
+            items: [productId],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+
+          await wishlistCollection.insertOne(newWishlist);
+
+          return res.status(201).json({
+            message: "Product added to wishlist",
+            wishlist: newWishlist,
+          });
+        }
+
+        // Check duplicate product
+        if (wishlist.items.includes(productId)) {
+          return res.status(400).json({
+            message: "Product already in wishlist",
+          });
+        }
+
+        // Add product
+        await wishlistCollection.updateOne(
+          { userId },
+          {
+            $push: {
+              items: productId,
+            },
+            $set: {
+              updatedAt: new Date(),
+            },
+          },
+        );
+
+        return res.status(200).json({
+          message: "Product added to wishlist",
+        });
+      } catch (error) {
+        console.error(error);
+
+        return res.status(500).json({
+          message: "Failed to add product to wishlist",
+        });
+      }
+    });
+
+    // admin Revenue :
+    app.get("/api/admin/revenue", async (req: Request, res: Response) => {
+      try {
+        const { range, startDate, endDate } = req.query;
+
+        const now = new Date();
+
+        let start: Date;
+        let end: Date = now;
+
+        // ==============================
+        // Date Range
+        // ==============================
+
+        switch (range) {
+          case "7days": {
+            start = new Date(now);
+            start.setDate(now.getDate() - 6);
+            break;
+          }
+
+          case "30days": {
+            start = new Date(now);
+            start.setDate(now.getDate() - 29);
+            break;
+          }
+
+          case "6months": {
+            start = new Date(now);
+            start.setMonth(now.getMonth() - 5);
+            start.setDate(1);
+            break;
+          }
+
+          case "12months": {
+            start = new Date(now);
+            start.setMonth(now.getMonth() - 11);
+            start.setDate(1);
+            break;
+          }
+
+          case "custom": {
+            if (!startDate || !endDate) {
+              return res.status(400).json({
+                success: false,
+                message: "startDate and endDate are required for custom range.",
+              });
+            }
+
+            start = new Date(startDate as string);
+
+            end = new Date(endDate as string);
+            end.setHours(23, 59, 59, 999);
+
+            break;
+          }
+
+          default: {
+            start = new Date(now);
+            start.setMonth(now.getMonth() - 11);
+            start.setDate(1);
+          }
+        }
+
+        // ==============================
+        // MongoDB Aggregation
+        // ==============================
+
+        const revenueData = await ordersCollection
+          .aggregate([
+            {
+              $match: {
+                orderStatus: "delivered",
+
+                createdAt: {
+                  $gte: start,
+                  $lte: end,
+                },
+              },
+            },
+
+            {
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: "$createdAt",
+                  },
+                },
+
+                revenue: {
+                  $sum: "$totalAmount",
+                },
+
+                orders: {
+                  $sum: 1,
+                },
+              },
+            },
+
+            {
+              $sort: {
+                _id: 1,
+              },
+            },
+
+            {
+              $project: {
+                _id: 0,
+
+                date: "$_id",
+
+                revenue: 1,
+
+                orders: 1,
+              },
+            },
+          ])
+          .toArray();
+
+        return res.status(200).json({
+          success: true,
+
+          data: revenueData,
+        });
+      } catch (error) {
+        console.error("Revenue analytics error:", error);
+
+        return res.status(500).json({
+          success: false,
+
+          message: "Failed to load revenue analytics.",
+        });
+      }
+    });
 
     // admin manage orders :
+
     app.get(
       "/api/admin/orders/:orderId",
       async (req: Request, res: Response) => {
@@ -185,6 +388,8 @@ async function run() {
         });
       }
     });
+
+    // user Orders :
 
     app.get("/api/orders/:orderId", async (req: Request, res: Response) => {
       try {
@@ -945,68 +1150,99 @@ async function run() {
 
     app.get("/api/admin/stats", async (req: Request, res: Response) => {
       try {
-        // Total counts
+        // ==============================
+        // Total Counts
+        // ==============================
+
         const totalProducts = await productsCollection.countDocuments();
+
         const totalUsers = await usersCollection.countDocuments();
-        // const totalOrders = await ordersCollection.countDocuments();
 
-        // // Order status counts
-        // const pendingOrders = await ordersCollection.countDocuments({
-        //   status: "pending",
-        // });
+        const totalOrders = await ordersCollection.countDocuments();
 
-        // const completedOrders = await ordersCollection.countDocuments({
-        //   status: "completed",
-        // });
+        // ==============================
+        // Order Status Counts
+        // ==============================
 
-        // const cancelledOrders = await ordersCollection.countDocuments({
-        //   status: "cancelled",
-        // });
+        const pendingOrders = await ordersCollection.countDocuments({
+          orderStatus: "pending",
+        });
 
+        const confirmedOrders = await ordersCollection.countDocuments({
+          orderStatus: "confirmed",
+        });
+
+        const processingOrders = await ordersCollection.countDocuments({
+          orderStatus: "processing",
+        });
+
+        const shippedOrders = await ordersCollection.countDocuments({
+          orderStatus: "shipped",
+        });
+
+        const deliveredOrders = await ordersCollection.countDocuments({
+          orderStatus: "delivered",
+        });
+
+        const cancelledOrders = await ordersCollection.countDocuments({
+          orderStatus: "cancelled",
+        });
+
+        // ==============================
         // Total Revenue
-        // const revenueResult = await ordersCollection
-        //   .aggregate([
-        //     {
-        //       $match: {
-        //         status: "completed",
-        //       },
-        //     },
-        //     {
-        //       $group: {
-        //         _id: null,
-        //         totalRevenue: {
-        //           $sum: "$totalAmount",
-        //         },
-        //       },
-        //     },
-        //   ])
-        //   .toArray();
+        // ==============================
 
-        // const totalRevenue =
-        //   revenueResult.length > 0 ? revenueResult[0].totalRevenue : 0;
+        const revenueResult = await ordersCollection
+          .aggregate([
+            {
+              $match: {
+                orderStatus: "delivered",
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalRevenue: {
+                  $sum: "$totalAmount",
+                },
+              },
+            },
+          ])
+          .toArray();
 
-        res.status(200).json({
+        const totalRevenue =
+          revenueResult.length > 0 ? revenueResult[0].totalRevenue : 0;
+
+        // ==============================
+        // Response
+        // ==============================
+
+        return res.status(200).json({
           success: true,
           data: {
             totalProducts,
             totalUsers,
-            totalOrders: 4,
-            pendingOrders: 0,
-            completedOrders: 0,
-            cancelledOrders: 0,
-            totalRevenue: 0,
+            totalOrders,
+
+            pendingOrders,
+            confirmedOrders,
+            processingOrders,
+            shippedOrders,
+            deliveredOrders,
+            cancelledOrders,
+
+            totalRevenue,
           },
         });
       } catch (error) {
-        console.error(error);
+        console.error("Admin stats error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
           success: false,
           message: "Failed to load admin stats.",
         });
       }
     });
-
     // routes
     app.get(
       "/api/users",
